@@ -18,6 +18,21 @@ public class ArmPlaybackController : MonoBehaviour
     [Header("Playback")]
     public float playbackDuration = 1.5f;
 
+    // ── Perturbation (set by ExperimentController during the probe phase) ──
+    // Rotation in degrees around the world-up axis (Y), pivoted at the
+    // shoulder. Positive = counter-clockwise viewed from above. The
+    // perturbation is applied to the NN-predicted hand position only.
+    private float _perturbationDeg = 0f;
+    private Vector3 _pivotShoulder;
+
+    public float CurrentPerturbationDeg => _perturbationDeg;
+
+    /// <summary>
+    /// Sets the perturbation magnitude and direction in degrees applied to
+    /// the NN-predicted hand around the shoulder pivot for the next Play() call.
+    /// </summary>
+    public void SetPerturbation(float degrees) { _perturbationDeg = degrees; }
+
     [Serializable]
     private class LayerJson
     {
@@ -100,6 +115,9 @@ public class ArmPlaybackController : MonoBehaviour
         _onComplete = onComplete;
         _isPlaying  = true;
         arm.BeginPlayback();
+        // Capture the shoulder pivot at playback start so the perturbation
+        // rotates the predicted hand around a stable reference.
+        _pivotShoulder = arm.ShoulderPositionUnity;
     }
 
     void Update()
@@ -110,6 +128,16 @@ public class ArmPlaybackController : MonoBehaviour
         float tNorm = Mathf.Clamp01(_elapsed / Mathf.Max(0.05f, playbackDuration));
 
         Vector3 hand = Predict(_crossPos.x, _crossPos.z, tNorm);
+
+        // Apply visuomotor perturbation: rotate the predicted hand around
+        // the world-up axis, pivoted at the shoulder captured at Play().
+        if (Mathf.Abs(_perturbationDeg) > 0.001f)
+        {
+            Vector3 fromShoulder = hand - _pivotShoulder;
+            fromShoulder = Quaternion.AngleAxis(_perturbationDeg, Vector3.up) * fromShoulder;
+            hand = _pivotShoulder + fromShoulder;
+        }
+
         arm.SetPlaybackHand(hand);
 
         if (tNorm >= 1f)

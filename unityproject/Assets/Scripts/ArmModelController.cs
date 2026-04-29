@@ -32,7 +32,10 @@ public class ArmModelController : MonoBehaviour
     public Color handColor     = new Color(0.88f, 0.75f, 0.63f);
 
     [Header("Smoothing")]
-    public float smoothSpeed = 20f;
+    [Tooltip("Position smoothing for joint targets. Lower = smoother but laggier.")]
+    public float smoothSpeed = 12f;
+    [Tooltip("Rotation smoothing for the arm bones. Lower values kill residual twist from marker jitter.")]
+    public float rotationSmoothSpeed = 10f;
 
     [Header("Marker Loss")]
     public float markerLossTimeout = 2.0f;
@@ -74,6 +77,7 @@ public class ArmModelController : MonoBehaviour
         // Force a fresh marker identification next frame
         _initialized = false;
         _markersLost = false;
+        _boneRotInitialized = false;
     }
 
     public void SetPlaybackHand(Vector3 handPos)
@@ -130,6 +134,9 @@ public class ArmModelController : MonoBehaviour
     private Vector3    _shoulderBindOffset;
     private Quaternion _upperArmBindLocalRot;
     private Quaternion _forearmBindLocalRot;
+    private Quaternion _upperArmSmoothedRot;
+    private Quaternion _forearmSmoothedRot;
+    private bool       _boneRotInitialized;
 
     // ─── Fallback primitives ────────────────────────────────────────
     private GameObject _primUpperArm, _primForearm, _primHand;
@@ -496,22 +503,47 @@ public class ArmModelController : MonoBehaviour
         // 1. Position model so upper-arm bone lands at shoulder marker
         _modelInstance.transform.position = shoulder - _shoulderBindOffset;
 
-        // 2. Reset bones to bind pose (undo last frame's rotations)
+        // 2. Reset bones to bind pose to compute the *target* rotations
         _upperArmBone.localRotation = _upperArmBindLocalRot;
         _forearmBone.localRotation  = _forearmBindLocalRot;
 
-        // 3. Rotate upper arm so it points from shoulder toward elbow
+        // 3. Target upper-arm rotation: swing-only (shortest arc from bind dir to shoulder→elbow)
+        Quaternion upperTarget = _upperArmBone.rotation;
         Vector3 curDir = (_forearmBone.position - _upperArmBone.position).normalized;
         Vector3 tgtDir = (elbow - shoulder).normalized;
         if (curDir.sqrMagnitude > 0.001f && tgtDir.sqrMagnitude > 0.001f)
-            _upperArmBone.rotation = Quaternion.FromToRotation(curDir, tgtDir) * _upperArmBone.rotation;
+            upperTarget = Quaternion.FromToRotation(curDir, tgtDir) * _upperArmBone.rotation;
 
-        // 4. Rotate forearm so it points from elbow toward hand
-        //    (forearm has moved because it's a child of upper arm)
+        // Apply upper-arm target provisionally so forearm bind-pose position updates
+        _upperArmBone.rotation = upperTarget;
+        _forearmBone.localRotation = _forearmBindLocalRot;
+
+        // 4. Target forearm rotation: swing-only (bind dir → elbow→hand)
+        Quaternion forearmTarget = _forearmBone.rotation;
         curDir = (_handBone.position - _forearmBone.position).normalized;
         tgtDir = (hand - elbow).normalized;
         if (curDir.sqrMagnitude > 0.001f && tgtDir.sqrMagnitude > 0.001f)
-            _forearmBone.rotation = Quaternion.FromToRotation(curDir, tgtDir) * _forearmBone.rotation;
+            forearmTarget = Quaternion.FromToRotation(curDir, tgtDir) * _forearmBone.rotation;
+
+        // 5. Slerp bone rotations toward targets — this absorbs the residual
+        //    twist caused by marker jitter (the roll axis is under-constrained
+        //    with only 3 positional markers, so any high-frequency change in
+        //    tgtDir would otherwise manifest as visible twist).
+        if (!_boneRotInitialized)
+        {
+            _upperArmSmoothedRot = upperTarget;
+            _forearmSmoothedRot  = forearmTarget;
+            _boneRotInitialized  = true;
+        }
+        else
+        {
+            float tr = rotationSmoothSpeed > 0 ? Time.deltaTime * rotationSmoothSpeed : 1f;
+            _upperArmSmoothedRot = Quaternion.Slerp(_upperArmSmoothedRot, upperTarget, tr);
+            _forearmSmoothedRot  = Quaternion.Slerp(_forearmSmoothedRot,  forearmTarget, tr);
+        }
+
+        _upperArmBone.rotation = _upperArmSmoothedRot;
+        _forearmBone.rotation  = _forearmSmoothedRot;
     }
 
     // ================================================================

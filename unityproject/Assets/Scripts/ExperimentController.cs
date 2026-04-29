@@ -42,6 +42,34 @@ public class ExperimentController : MonoBehaviour
     public float playbackRestDelay    = 1.5f;  // wait after elbow returns to rest zone
     public float playbackPostDelay    = 1.0f;  // pause after each autonomous movement
 
+    [Header("Probe Phase (visuomotor detection threshold)")]
+    [Tooltip("If true, after fine-tune the experiment runs the perturbation-detection probe instead of the silent autonomous playback.")]
+    public bool   enableProbePhase    = false;
+    [Tooltip("Magnitudes (deg) of the rotation applied to the NN-predicted hand around the shoulder. A 0 entry serves as control.")]
+    public float[] probeAngles        = new float[] { 0f, 5f, 10f, 15f, 20f, 25f, 30f, 45f };
+    [Tooltip("Number of trials per perturbation level.")]
+    public int    trialsPerProbeLevel = 5;
+    [Tooltip("Randomize the sign (±) of the perturbation each probe trial. Recommended on to avoid motor adaptation.")]
+    public bool   randomizeProbeDirection = true;
+    [Tooltip("Randomize the order of probe levels. If off, levels are presented from smallest to largest.")]
+    public bool   randomizeProbeOrder     = false;
+
+    [Header("Spontaneous-event annotations")]
+    [Tooltip("Generic mark: experimenter presses this when something noteworthy happens (label = 'mark').")]
+    public Key    annotationGenericKey = Key.M;
+    [Tooltip("Predefined label 1: participant verbalised that the arm felt strange.")]
+    public Key    annotationKey1 = Key.Digit1;
+    public string annotationLabel1 = "user_said_strange";
+    [Tooltip("Predefined label 2: participant looked at the virtual arm with visible surprise.")]
+    public Key    annotationKey2 = Key.Digit2;
+    public string annotationLabel2 = "user_visibly_surprised";
+    [Tooltip("Predefined label 3: participant stopped or hesitated mid-trial.")]
+    public Key    annotationKey3 = Key.Digit3;
+    public string annotationLabel3 = "user_hesitated";
+    [Tooltip("Predefined label 4: any other reaction worth marking.")]
+    public Key    annotationKey4 = Key.Digit4;
+    public string annotationLabel4 = "other";
+
     [Header("Fine-tuning (pretrain + finetune pipeline)")]
     [Tooltip("If true, after data collection launches Python to fine-tune the NN on this session's CSV before playback.")]
     public bool   autoFinetune    = true;
@@ -75,11 +103,11 @@ public class ExperimentController : MonoBehaviour
     public float minCrossDistFromRest = 0.25f; // min XZ distance between cross and rest-zone center
 
     [Header("Cross Spawn Area")]
-    [Tooltip("Cross is spawned at random X ∈ [xMin,xMax], Z ∈ [zMin,zMax], Y = tableSurfaceY.")]
-    public float xMin = -0.55f;
-    public float xMax =  0.55f;
+    [Tooltip("Cross is spawned at random X ∈ [xMin,xMax], Z ∈ [zMin,zMax], Y = tableSurfaceY. Bounds chosen so the user can reach any cross without leaning forward (shoulder must stay still — the NN playback assumes a frozen shoulder).")]
+    public float xMin = -0.25f;
+    public float xMax =  0.45f;
     public float zMin =  0.55f;   // keep crosses away from the rest zone
-    public float zMax =  0.95f;
+    public float zMax =  0.75f;   // arm-only reach (no torso lean)
     public float tableSurfaceY = 1.155f;
 
     [Header("Rest Zone (green rectangle, closest to user)")]
@@ -97,8 +125,20 @@ public class ExperimentController : MonoBehaviour
     private enum Phase {
         Idle, WaitingForRest, PreCue, ActiveTrial, PostTrial, Done,
         WaitingForTraining,
-        PlaybackWaitRest, PlaybackPreCue, PlaybackActive, PlaybackPost, PlaybackDone
+        PlaybackWaitRest, PlaybackPreCue, PlaybackActive, PlaybackPost, PlaybackDone,
+        ProbeWaitRest, ProbePreCue, ProbeActive, ProbePost, ProbeDone
     }
+
+    // ── Probe phase state ─────────────────────────────────────────────
+    private List<int> _probeOrder;          // indices into probeAngles, in presentation order
+    private int   _probeOrderIdx     = 0;   // current entry in _probeOrder
+    private int   _probeTrialInLevel = 0;   // 1..trialsPerProbeLevel within current level
+    private float _currentProbeAngle = 0f;  // signed angle applied this trial (deg)
+    private int   _currentProbeDir   = +1;  // ±1
+
+    // Side-channel events log: timestamp + phase + trial + angle + label.
+    private StreamWriter _eventCsv;
+    private string       _eventCsvPath;
 
     private int   _playbackIndex  = 0;
     private float _playbackHold   = 0f;
@@ -167,13 +207,14 @@ public class ExperimentController : MonoBehaviour
             return;
         }
 
-        if (_phase == Phase.Idle || _phase == Phase.PlaybackDone) return;
+        if (_phase == Phase.Idle || _phase == Phase.PlaybackDone || _phase == Phase.ProbeDone) return;
 
         // While Python is fine-tuning, skip logging (CSV already closed).
         if (_phase == Phase.WaitingForTraining) { TickFinetune(); return; }
 
         UpdateHandKinematics();
         LogFrame();
+        TickAnnotations();
 
         switch (_phase)
         {
@@ -262,6 +303,30 @@ public class ExperimentController : MonoBehaviour
                     if (_playbackIndex >= playbackTrials) EndPlayback();
                     else _phase = Phase.PlaybackWaitRest;
                 }
+                break;
+
+            // ── Probe (perturbation-detection) phase ────────────────────
+            case Phase.ProbeWaitRest:
+                if (HandInRestZone())
+                {
+                    _playbackHold -= Time.deltaTime;
+                    if (_playbackHold <= 0f) BeginProbeTrial();
+                }
+                else _playbackHold = playbackRestDelay;
+                break;
+
+            case Phase.ProbePreCue:
+                _phaseTimer -= Time.deltaTime;
+                if (_phaseTimer <= 0f) StartProbeMovement();
+                break;
+
+            case Phase.ProbeActive:
+                // Driven by ArmPlaybackController; completion callback advances phase.
+                break;
+
+            case Phase.ProbePost:
+                _phaseTimer -= Time.deltaTime;
+                if (_phaseTimer <= 0f) AdvanceProbeOrLoop();
                 break;
         }
     }
@@ -364,7 +429,7 @@ public class ExperimentController : MonoBehaviour
             }
             Debug.LogWarning("[Exp] Fine-tune launch failed — skipping.");
         }
-        EnterPlaybackPhase();
+        EnterAutonomousPhase();
     }
 
     private void MaybeLaunchBackgroundFinetune()
@@ -399,6 +464,15 @@ public class ExperimentController : MonoBehaviour
         }
     }
 
+    private void EnterAutonomousPhase()
+    {
+        // Branch between the legacy silent-playback flow and the new probe
+        // (perturbation-detection) flow. The probe flow keeps fine-tune,
+        // pretrain, etc. — only the post-data-collection phase changes.
+        if (enableProbePhase) EnterProbePhase();
+        else                  EnterPlaybackPhase();
+    }
+
     private void EnterPlaybackPhase()
     {
         if (playback == null || !playback.IsLoaded)
@@ -412,6 +486,110 @@ public class ExperimentController : MonoBehaviour
         _playbackIndex = 0;
         _playbackHold  = playbackRestDelay;
         _phase = Phase.PlaybackWaitRest;
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    //  Probe (perturbation-detection) phase
+    // ────────────────────────────────────────────────────────────────
+
+    private void EnterProbePhase()
+    {
+        if (playback == null || !playback.IsLoaded)
+        {
+            Debug.LogWarning("[Exp/Probe] No playback model loaded — cannot run probe phase.");
+            _phase = Phase.ProbeDone;
+            DestroyRestZone();
+            return;
+        }
+        if (probeAngles == null || probeAngles.Length == 0)
+        {
+            Debug.LogWarning("[Exp/Probe] probeAngles is empty — skipping probe phase.");
+            _phase = Phase.ProbeDone;
+            DestroyRestZone();
+            return;
+        }
+
+        ReopenCSVAppend();
+
+        // Build presentation order
+        _probeOrder = new List<int>(probeAngles.Length);
+        for (int i = 0; i < probeAngles.Length; i++) _probeOrder.Add(i);
+        if (randomizeProbeOrder)
+        {
+            for (int i = _probeOrder.Count - 1; i > 0; i--)
+            {
+                int j = Random.Range(0, i + 1);
+                (_probeOrder[i], _probeOrder[j]) = (_probeOrder[j], _probeOrder[i]);
+            }
+        }
+        _probeOrderIdx     = 0;
+        _probeTrialInLevel = 0;
+        _phase             = Phase.ProbeWaitRest;
+        _playbackHold      = playbackRestDelay;
+
+        Debug.Log($"[Exp/Probe] Starting probe phase: {probeAngles.Length} levels × {trialsPerProbeLevel} trials.");
+    }
+
+    private void BeginProbeTrial()
+    {
+        // Pick the angle and direction for this trial
+        int angleIdx = _probeOrder[_probeOrderIdx];
+        float magnitude = Mathf.Abs(probeAngles[angleIdx]);
+        _currentProbeDir   = randomizeProbeDirection ? (Random.value < 0.5f ? -1 : +1) : +1;
+        _currentProbeAngle = magnitude * _currentProbeDir;
+
+        playback.SetPerturbation(_currentProbeAngle);
+
+        _crossPos    = RandomCrossPosition();
+        _crossGO     = SpawnCross(_crossPos);
+        _silentTrial = false;
+        _trialStart  = Time.time;
+        _phase       = Phase.ProbePreCue;
+        _phaseTimer  = preCueDelay;
+
+        Debug.Log($"[Exp/Probe] Level {_probeOrderIdx + 1}/{_probeOrder.Count} " +
+                  $"(θ = {_currentProbeAngle:+0.0;-0.0}°)  " +
+                  $"trial {_probeTrialInLevel + 1}/{trialsPerProbeLevel}");
+    }
+
+    private void StartProbeMovement()
+    {
+        _phase = Phase.ProbeActive;
+        playback.Play(_crossPos, OnProbeMovementDone);
+    }
+
+    private void OnProbeMovementDone()
+    {
+        DestroyCross();
+        _probeTrialInLevel++;
+        _phase      = Phase.ProbePost;
+        _phaseTimer = playbackPostDelay;
+        Debug.Log($"[Exp/Probe] Trial done — θ={_currentProbeAngle:+0.0;-0.0}°  " +
+                  $"({_probeTrialInLevel}/{trialsPerProbeLevel} at this level)");
+    }
+
+    private void AdvanceProbeOrLoop()
+    {
+        if (_probeTrialInLevel >= trialsPerProbeLevel)
+        {
+            _probeOrderIdx++;
+            _probeTrialInLevel = 0;
+            if (_probeOrderIdx >= _probeOrder.Count)
+            {
+                EndProbe();
+                return;
+            }
+        }
+        _phase        = Phase.ProbeWaitRest;
+        _playbackHold = playbackRestDelay;
+    }
+
+    private void EndProbe()
+    {
+        Debug.Log("[Exp/Probe] Probe phase finished.");
+        playback?.SetPerturbation(0f);
+        DestroyRestZone();
+        _phase = Phase.ProbeDone;
     }
 
     private void ReopenCSVAppend()
@@ -474,7 +652,7 @@ public class ExperimentController : MonoBehaviour
             if (code != 0)
             {
                 Debug.LogError($"[Exp] Fine-tune failed (exit {code}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
-                EnterPlaybackPhase();   // fall back to whatever JSON exists
+                EnterAutonomousPhase();   // fall back to whatever JSON exists
                 return;
             }
             Debug.Log("[Exp] Fine-tune OK. Reloading model.\n" + stdout);
@@ -484,7 +662,7 @@ public class ExperimentController : MonoBehaviour
             {
                 try { File.Delete(_snapshotCsvPath); } catch { }
             }
-            EnterPlaybackPhase();
+            EnterAutonomousPhase();
             return;
         }
 
@@ -494,7 +672,7 @@ public class ExperimentController : MonoBehaviour
             try { _trainProc?.Kill(); } catch { }
             _trainProc?.Dispose();
             _trainProc = null;
-            EnterPlaybackPhase();
+            EnterAutonomousPhase();
         }
     }
 
@@ -693,7 +871,8 @@ public class ExperimentController : MonoBehaviour
             "hand_raw_x,hand_raw_y,hand_raw_z," +
             "vel_x,vel_y,vel_z," +
             "head_pos_x,head_pos_y,head_pos_z," +
-            "head_rot_x,head_rot_y,head_rot_z,head_rot_w");
+            "head_rot_x,head_rot_y,head_rot_z,head_rot_w," +
+            "probe_level,probe_trial,probe_angle,probe_dir");
         _csv.Flush();
     }
 
@@ -705,6 +884,14 @@ public class ExperimentController : MonoBehaviour
         Vector3 hp    = _headset != null ? _headset.position : Vector3.zero;
         Quaternion hr = _headset != null ? _headset.rotation : Quaternion.identity;
         var ci = CultureInfo.InvariantCulture;
+        // Probe-phase columns: only meaningful while in a Probe* state.
+        bool inProbe = _phase == Phase.ProbeWaitRest || _phase == Phase.ProbePreCue
+                    || _phase == Phase.ProbeActive   || _phase == Phase.ProbePost;
+        int probeLevel    = inProbe ? _probeOrderIdx + 1 : 0;
+        int probeTrial    = inProbe ? _probeTrialInLevel + 1 : 0;
+        float probeAngle  = inProbe ? _currentProbeAngle : 0f;
+        int probeDir      = inProbe ? _currentProbeDir   : 0;
+
         _csv.WriteLine(string.Format(ci,
             "{0:F4},{1},{2},{3},{4},{5}," +
             "{6:F4},{7:F4},{8:F4}," +
@@ -712,7 +899,8 @@ public class ExperimentController : MonoBehaviour
             "{12:F4},{13:F4},{14:F4}," +
             "{15:F4},{16:F4},{17:F4}," +
             "{18:F4},{19:F4},{20:F4}," +
-            "{21:F4},{22:F4},{23:F4},{24:F4}",
+            "{21:F4},{22:F4},{23:F4},{24:F4}," +
+            "{25},{26},{27:F2},{28}",
             Time.time - _trialStart, _trialIndex, _phase,
             _silentTrial ? 1 : 0, _trialScored ? 1 : 0, _score,
             _crossPos.x, _crossPos.y, _crossPos.z,
@@ -720,7 +908,8 @@ public class ExperimentController : MonoBehaviour
             handR.x, handR.y, handR.z,
             _handVelocity.x, _handVelocity.y, _handVelocity.z,
             hp.x, hp.y, hp.z,
-            hr.x, hr.y, hr.z, hr.w));
+            hr.x, hr.y, hr.z, hr.w,
+            probeLevel, probeTrial, probeAngle, probeDir));
     }
 
     private Vector3 GetHandRaw()
@@ -734,6 +923,59 @@ public class ExperimentController : MonoBehaviour
     private void CloseCSV()
     {
         if (_csv != null) { _csv.Flush(); _csv.Close(); _csv = null; }
+        if (_eventCsv != null) { _eventCsv.Flush(); _eventCsv.Close(); _eventCsv = null; }
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    //  Spontaneous-event annotations
+    // ────────────────────────────────────────────────────────────────
+
+    private void OpenEventCsv()
+    {
+        if (_eventCsv != null) return;
+        try
+        {
+            string dir = Path.Combine(Application.dataPath, "..", logFolder);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            string stamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            _eventCsvPath = Path.Combine(dir, $"events_{stamp}.csv");
+            _eventCsv = new StreamWriter(_eventCsvPath, false);
+            _eventCsv.WriteLine("time,trial,phase,probe_level,probe_angle,label");
+            _eventCsv.Flush();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"[Exp] Could not open events CSV: {e.Message}");
+            _eventCsv = null;
+        }
+    }
+
+    private void WriteEvent(string label)
+    {
+        if (_eventCsv == null) OpenEventCsv();
+        if (_eventCsv == null) return;
+        var ci = CultureInfo.InvariantCulture;
+        bool inProbe = _phase == Phase.ProbeWaitRest || _phase == Phase.ProbePreCue
+                    || _phase == Phase.ProbeActive   || _phase == Phase.ProbePost;
+        int probeLevel    = inProbe ? _probeOrderIdx + 1 : 0;
+        float probeAngle  = inProbe ? _currentProbeAngle : 0f;
+        _eventCsv.WriteLine(string.Format(ci,
+            "{0:F4},{1},{2},{3},{4:F2},{5}",
+            Time.time - _trialStart, _trialIndex, _phase,
+            probeLevel, probeAngle, label));
+        _eventCsv.Flush();
+        Debug.Log($"[Exp/Event] {label}  (trial {_trialIndex}, θ={probeAngle:+0.0;-0.0}°)");
+    }
+
+    private void TickAnnotations()
+    {
+        if (Keyboard.current == null) return;
+
+        if (Keyboard.current[annotationGenericKey].wasPressedThisFrame) WriteEvent("mark");
+        if (Keyboard.current[annotationKey1].wasPressedThisFrame)       WriteEvent(annotationLabel1);
+        if (Keyboard.current[annotationKey2].wasPressedThisFrame)       WriteEvent(annotationLabel2);
+        if (Keyboard.current[annotationKey3].wasPressedThisFrame)       WriteEvent(annotationLabel3);
+        if (Keyboard.current[annotationKey4].wasPressedThisFrame)       WriteEvent(annotationLabel4);
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -796,6 +1038,31 @@ public class ExperimentController : MonoBehaviour
             case Phase.PlaybackDone:
                 s.normal.textColor = Color.green;
                 GUI.Label(new Rect(10, y, 800, 20), "Session complete.", s);
+                break;
+
+            // ── Probe phase ─────────────────────────────────────────
+            case Phase.ProbeWaitRest:
+                s.normal.textColor = Color.yellow;
+                GUI.Label(new Rect(10, y, 800, 20),
+                    $"PROBE  level {_probeOrderIdx + 1}/{(_probeOrder != null ? _probeOrder.Count : 0)}  " +
+                    $"trial {_probeTrialInLevel + 1}/{trialsPerProbeLevel}  —  return hand to rest zone", s);
+                break;
+            case Phase.ProbePreCue:
+            case Phase.ProbeActive:
+                s.normal.textColor = new Color(1f, 0.6f, 1f);
+                GUI.Label(new Rect(10, y, 900, 20),
+                    $"PROBE  θ = {_currentProbeAngle:+0.0;-0.0}°  " +
+                    $"level {_probeOrderIdx + 1}/{(_probeOrder != null ? _probeOrder.Count : 0)}  " +
+                    $"trial {_probeTrialInLevel + 1}/{trialsPerProbeLevel}", s);
+                break;
+            case Phase.ProbePost:
+                s.normal.textColor = Color.magenta;
+                GUI.Label(new Rect(10, y, 900, 20),
+                    $"PROBE  θ={_currentProbeAngle:+0.0;-0.0}°  trial done   [M=mark  1-4=labels]", s);
+                break;
+            case Phase.ProbeDone:
+                s.normal.textColor = Color.green;
+                GUI.Label(new Rect(10, y, 800, 20), "Probe phase complete.", s);
                 break;
         }
     }

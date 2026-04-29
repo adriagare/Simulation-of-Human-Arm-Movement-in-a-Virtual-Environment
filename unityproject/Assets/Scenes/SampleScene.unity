@@ -1660,6 +1660,7 @@ MonoBehaviour:
   forearmColor: {r: 0.82, g: 0.69, b: 0.57, a: 1}
   handColor: {r: 0.88, g: 0.75, b: 0.63, a: 1}
   smoothSpeed: 20
+  rotationSmoothSpeed: 10
   markerLossTimeout: 2
   showJointSpheres: 1
   armModeActive: 0
@@ -1693,7 +1694,15 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ExperimentController
   arm: {fileID: 1114246111}
   receiver: {fileID: 912144045}
-  scoreText: {fileID: 1822000017}
+  playback: {fileID: 0}
+  playbackTrials: 5
+  playbackRestDelay: 1.5
+  playbackPostDelay: 1
+  autoFinetune: 1
+  pythonExecutable: python
+  trainScriptPath: ../ml/train_trajectory.py
+  finetuneTimeout: 120
+  backgroundFinetuneTriggerTrial: 25
   startClip: {fileID: 8300000, guid: f4db661dfc100eb41a6946d41fcc69e0, type: 3}
   itempickerClip: {fileID: 8300000, guid: 8a9a1068b1adf8e48bb7795f5deb9cf6, type: 3}
   wrongClip: {fileID: 0}
@@ -1708,6 +1717,8 @@ MonoBehaviour:
   crossSize: 0.09
   silentProbability: 0.3
   stillnessThreshold: 0.05
+  firstTrialDelay: 1.5
+  minCrossDistFromRest: 0.25
   xMin: -0.55
   xMax: 0.55
   zMin: 0.55
@@ -3425,7 +3436,7 @@ RectTransform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1822000016}
-  m_LocalRotation: {x: 0, y: 1, z: 0, w: -0.00000004371139}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 2.97}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
