@@ -1695,14 +1695,6 @@ MonoBehaviour:
   arm: {fileID: 1114246111}
   receiver: {fileID: 912144045}
   playback: {fileID: 0}
-  playbackTrials: 5
-  playbackRestDelay: 1.5
-  playbackPostDelay: 1
-  autoFinetune: 1
-  pythonExecutable: python
-  trainScriptPath: ../ml/train_trajectory.py
-  finetuneTimeout: 120
-  backgroundFinetuneTriggerTrial: 25
   startClip: {fileID: 8300000, guid: f4db661dfc100eb41a6946d41fcc69e0, type: 3}
   itempickerClip: {fileID: 8300000, guid: 8a9a1068b1adf8e48bb7795f5deb9cf6, type: 3}
   wrongClip: {fileID: 0}

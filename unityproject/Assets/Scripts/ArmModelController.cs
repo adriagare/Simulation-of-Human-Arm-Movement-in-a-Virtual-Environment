@@ -54,6 +54,17 @@ public class ArmModelController : MonoBehaviour
     public Vector3 ElbowPositionUnity    => _jointSmoothed[ELBOW];
     public bool IsPlaybackActive => _playbackActive;
 
+    // Marker-derived joints kept fresh even when playback overrides the render.
+    // The displayed arm follows _jointSmoothed; these buffers track what the
+    // user is physically doing, so callers can read the real hand for hit
+    // detection or analytical perturbation pivots while the render is hijacked.
+    private Vector3[] _realJoints       = new Vector3[3];
+    private bool      _realInitialized;
+    public Vector3 RealHandPositionUnity     => _realInitialized ? _realJoints[HAND]     : _jointSmoothed[HAND];
+    public Vector3 RealShoulderPositionUnity => _realInitialized ? _realJoints[SHOULDER] : _jointSmoothed[SHOULDER];
+    public Vector3 RealElbowPositionUnity    => _realInitialized ? _realJoints[ELBOW]    : _jointSmoothed[ELBOW];
+    public bool HasRealHand => _realInitialized;
+
     // Playback override (driven by NN) — when active, marker input is ignored
     // and the hand is moved to the provided position each frame. Elbow is
     // resolved via simple 2-link IK from the frozen shoulder.
@@ -74,10 +85,25 @@ public class ArmModelController : MonoBehaviour
     public void EndPlayback()
     {
         _playbackActive = false;
-        // Force a fresh marker identification next frame
-        _initialized = false;
         _markersLost = false;
         _boneRotInitialized = false;
+        // Hand the render buffers back to the marker-derived positions so the
+        // displayed arm doesn't jump from the perturbed position to the real
+        // one when playback releases. The real-joint buffer has been kept
+        // fresh throughout the playback window.
+        if (_realInitialized)
+        {
+            for (int j = 0; j < 3; j++)
+            {
+                _jointTargets[j]  = _realJoints[j];
+                _jointSmoothed[j] = _realJoints[j];
+            }
+            _initialized = true;
+        }
+        else
+        {
+            _initialized = false;
+        }
     }
 
     public void SetPlaybackHand(Vector3 handPos)
@@ -111,6 +137,13 @@ public class ArmModelController : MonoBehaviour
     }
 
     private const int SHOULDER = 0, ELBOW = 1, HAND = 2;
+
+    // Anatomical offset applied at the render stage to translate the rear-
+    // upper shoulder marker into the underlying joint centre. Expressed in
+    // the participant's body frame: x = right, y = up, z = forward (gaze).
+    // Shoulder marker is mounted on the upper-rear of the deltoid; the
+    // joint sits roughly 5 cm below and 10 cm in front of the marker.
+    private static readonly Vector3 SHOULDER_OFFSET_LOCAL = new Vector3(0f, -0.05f, 0.10f);
 
     private UDPMarkerReceiver _receiver;
     private CoordinateSynchronizer _synchronizer;
@@ -180,9 +213,11 @@ public class ArmModelController : MonoBehaviour
 
         if (!armModeActive || _receiver == null || _headset == null) return;
 
-        // ── Playback override: skip marker logic, just smooth + render ──
+        // ── Playback override: marker logic still runs in parallel so
+        //    RealHandPositionUnity stays fresh while the render is hijacked. ──
         if (_playbackActive)
         {
+            UpdateRealJointsFromMarkers();
             float tp = smoothSpeed > 0 ? Time.deltaTime * smoothSpeed : 1f;
             for (int j = 0; j < 3; j++)
                 _jointSmoothed[j] = Vector3.Lerp(_jointSmoothed[j], _jointTargets[j], tp);
@@ -290,6 +325,11 @@ public class ArmModelController : MonoBehaviour
         for (int j = 0; j < 3; j++)
             _jointSmoothed[j] = Vector3.Lerp(_jointSmoothed[j], _jointTargets[j], t);
 
+        // Mirror to the real-joint buffer so the API stays consistent
+        // whether or not playback is currently overriding the render.
+        for (int j = 0; j < 3; j++) _realJoints[j] = _jointSmoothed[j];
+        _realInitialized = true;
+
         // ── Render ──────────────────────────────────────────────────
         SetVisualsActive(true);
 
@@ -299,6 +339,83 @@ public class ArmModelController : MonoBehaviour
             UpdatePrimitives();
 
         UpdateJointSpheres();
+    }
+
+    // ================================================================
+    //  Real-marker tracking during playback
+    // ================================================================
+
+    // Lightweight parallel of the main marker pipeline: updates _realJoints
+    // from the raw OptiTrack feed while the visible arm is driven by the
+    // playback override. Identification uses headset proximity on first
+    // contact, then nearest-joint matching on subsequent frames.
+    private void UpdateRealJointsFromMarkers()
+    {
+        if (_receiver == null || _headset == null) return;
+
+        Dictionary<int, Vector3> allRaw = _receiver.GetAllRawPositions();
+        var pts = new List<Vector3>(allRaw.Count);
+        foreach (var kvp in allRaw) pts.Add(TransformPoint(kvp.Value));
+
+        if (pts.Count > 3)
+        {
+            pts.Sort((a, b) =>
+                Vector3.SqrMagnitude(a - _headset.position)
+                    .CompareTo(Vector3.SqrMagnitude(b - _headset.position)));
+            pts.RemoveRange(3, pts.Count - 3);
+        }
+
+        if (pts.Count < 3) return;  // hold last good values
+
+        if (!_realInitialized)
+        {
+            // First contact during playback: identify by headset proximity.
+            Vector3 head = _headset.position;
+            int sIdx = 0; float minD = float.MaxValue;
+            for (int i = 0; i < 3; i++)
+            {
+                float d = Vector3.SqrMagnitude(pts[i] - head);
+                if (d < minD) { minD = d; sIdx = i; }
+            }
+            int hIdx = -1; float maxD = -1f;
+            for (int i = 0; i < 3; i++)
+            {
+                if (i == sIdx) continue;
+                float d = Vector3.SqrMagnitude(pts[i] - pts[sIdx]);
+                if (d > maxD) { maxD = d; hIdx = i; }
+            }
+            int eIdx = 3 - sIdx - hIdx;
+            _realJoints[SHOULDER] = pts[sIdx];
+            _realJoints[ELBOW]    = pts[eIdx];
+            _realJoints[HAND]     = pts[hIdx];
+            _realInitialized = true;
+            return;
+        }
+
+        // Continuous frames: assign each marker to its nearest joint slot.
+        bool[] jointTaken = new bool[3];
+        bool[] markerUsed = new bool[3];
+        for (int pass = 0; pass < 3; pass++)
+        {
+            float bestDist = float.MaxValue;
+            int bestM = -1, bestJ = -1;
+            for (int m = 0; m < 3; m++)
+            {
+                if (markerUsed[m]) continue;
+                for (int j = 0; j < 3; j++)
+                {
+                    if (jointTaken[j]) continue;
+                    float d = Vector3.SqrMagnitude(pts[m] - _realJoints[j]);
+                    if (d < bestDist) { bestDist = d; bestM = m; bestJ = j; }
+                }
+            }
+            if (bestM >= 0)
+            {
+                _realJoints[bestJ] = pts[bestM];
+                jointTaken[bestJ] = true;
+                markerUsed[bestM] = true;
+            }
+        }
     }
 
     // ================================================================
@@ -496,11 +613,15 @@ public class ArmModelController : MonoBehaviour
 
     private void UpdateRiggedModel()
     {
-        Vector3 shoulder = _jointSmoothed[SHOULDER];
+        // Translate the shoulder marker to the anatomical joint centre so
+        // the upper arm comes out of the actual shoulder rather than the
+        // back of the user. Elbow and hand markers are co-located with
+        // their joints, so no offset there.
+        Vector3 shoulder = _jointSmoothed[SHOULDER] + AnatomicalShoulderOffsetWorld();
         Vector3 elbow    = _jointSmoothed[ELBOW];
         Vector3 hand     = _jointSmoothed[HAND];
 
-        // 1. Position model so upper-arm bone lands at shoulder marker
+        // 1. Position model so upper-arm bone lands at the shifted shoulder.
         _modelInstance.transform.position = shoulder - _shoulderBindOffset;
 
         // 2. Reset bones to bind pose to compute the *target* rotations
@@ -544,6 +665,34 @@ public class ArmModelController : MonoBehaviour
 
         _upperArmBone.rotation = _upperArmSmoothedRot;
         _forearmBone.rotation  = _forearmSmoothedRot;
+
+        // 6. Snap the forearm and hand bones onto the elbow and hand
+        //    markers AFTER rotation. The bind-pose bone lengths rarely
+        //    match the participant's real arm dimensions, so without this
+        //    override the visual hand floats at bind_forearm_length from
+        //    the elbow instead of where the marker actually is. The mesh
+        //    skinning stretches to bridge the gap. This guarantees that
+        //    the rendered hand always sits exactly on the marker — a hard
+        //    requirement of the experimental protocol.
+        _forearmBone.position = elbow;
+        _handBone.position    = hand;
+    }
+
+    // Body-local (right, up, gaze-forward) axis frame derived from the
+    // headset orientation. Used to express the shoulder anatomical offset
+    // in a frame that follows the participant rather than world space.
+    private Vector3 AnatomicalShoulderOffsetWorld()
+    {
+        Vector3 fwd = Vector3.forward;
+        if (_headset != null)
+        {
+            Vector3 f = Vector3.ProjectOnPlane(_headset.forward, Vector3.up);
+            if (f.sqrMagnitude > 1e-4f) fwd = f.normalized;
+        }
+        Vector3 right = Vector3.Cross(Vector3.up, fwd);
+        return right * SHOULDER_OFFSET_LOCAL.x
+             + Vector3.up * SHOULDER_OFFSET_LOCAL.y
+             + fwd * SHOULDER_OFFSET_LOCAL.z;
     }
 
     // ================================================================
@@ -574,11 +723,17 @@ public class ArmModelController : MonoBehaviour
 
     private void UpdatePrimitives()
     {
-        UpdateCapsule(_primUpperArm, _jointSmoothed[SHOULDER], _jointSmoothed[ELBOW]);
-        UpdateCapsule(_primForearm,  _jointSmoothed[ELBOW],    _jointSmoothed[HAND]);
+        // Match the rigged-model branch: shoulder marker is shifted to the
+        // anatomical joint; elbow and hand stay at their markers.
+        Vector3 shoulder = _jointSmoothed[SHOULDER] + AnatomicalShoulderOffsetWorld();
+        Vector3 elbow    = _jointSmoothed[ELBOW];
+        Vector3 hand     = _jointSmoothed[HAND];
 
-        _primHand.transform.position = _jointSmoothed[HAND];
-        Vector3 dir = (_jointSmoothed[HAND] - _jointSmoothed[ELBOW]).normalized;
+        UpdateCapsule(_primUpperArm, shoulder, elbow);
+        UpdateCapsule(_primForearm,  elbow,    hand);
+
+        _primHand.transform.position = hand;
+        Vector3 dir = (hand - elbow).normalized;
         if (dir != Vector3.zero) _primHand.transform.forward = dir;
         float d = handRadius * 2f;
         _primHand.transform.localScale = new Vector3(d, d, d);

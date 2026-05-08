@@ -5,6 +5,8 @@
 # Markdown files at root (project notes, not for the repo)
 /CLAUDE.md
 /situation.md
+data_analysis
+data_analysis/*
 /scripts_documentation.md
 /scripts_modifiied.md
 camera_layout.md
@@ -14,12 +16,13 @@ lastSprintTFG.md
 # Thesis (kept local only)
 /Thesis/
 /ml/wheels
-
+LAB.md
+human_description.md
 # Claude Code agent and skill configs
 /.claude/
 /.agents/
 /skills-lock.json
-
+unityproject/Positions/*
 # OS junk
 .DS_Store
 Thumbs.db

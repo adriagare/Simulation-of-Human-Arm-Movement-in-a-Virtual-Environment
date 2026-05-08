@@ -25,6 +25,10 @@ public class UDPMarkerReceiver : MonoBehaviour
     [Tooltip("Radius of each marker sphere.")]
     public float markerRadius = 0.015f;
 
+    [Header("Headset proximity filter")]
+    [Tooltip("Markers within this radius of the main camera (the user's head) are dropped. The Python client already filters flicker markers by temporal persistence; this is a safety net for anything that slips through.")]
+    public float headsetExclusionRadius = 0.30f;
+
     [Header("CSV Logging")]
     [Tooltip("Enable OptiTrack marker CSV logging (starts when headset tracking is active).")]
     public bool enableCSVLog = true;
@@ -158,6 +162,8 @@ public class UDPMarkerReceiver : MonoBehaviour
             Debug.Log($"[UDP] Frame {frameId}, {markerCount} markers");
 
         HashSet<int> activeIds = new HashSet<int>();
+        Camera headCam = Camera.main;
+        float exclSq = headsetExclusionRadius * headsetExclusionRadius;
 
         for (int i = 0; i < markerCount && i + 2 < parts.Length; i++)
         {
@@ -169,14 +175,25 @@ public class UDPMarkerReceiver : MonoBehaviour
             if (!float.TryParse(mp[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float y)) continue;
             if (!float.TryParse(mp[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float z)) continue;
 
-            activeIds.Add(markerId);
             Vector3 rawPos = new Vector3(x, y, z);
-            _latestRawPositions[markerId] = rawPos;
 
             // Apply coordinate transform (pre-calibration offset or full transform)
             Vector3 displayPos = _synchronizer != null
                 ? _synchronizer.OptiTrackToUnity(rawPos)
                 : rawPos;
+
+            // Drop markers sitting on top of the user's head — the Python
+            // persistence filter already removes the headset flicker, but
+            // the very rare ghost that lingers long enough to leak through
+            // is caught here by spatial proximity to the main camera.
+            if (headCam != null && headsetExclusionRadius > 0f)
+            {
+                if ((displayPos - headCam.transform.position).sqrMagnitude < exclSq)
+                    continue;
+            }
+
+            activeIds.Add(markerId);
+            _latestRawPositions[markerId] = rawPos;
 
             // Create or update marker sphere
             if (!_markerObjects.TryGetValue(markerId, out GameObject sphere))
@@ -196,7 +213,9 @@ public class UDPMarkerReceiver : MonoBehaviour
         foreach (var kvp in _markerObjects)
             kvp.Value.SetActive(activeIds.Contains(kvp.Key));
 
-        // Log to CSV once headset tracking is active
+        // Log to CSV once headset tracking is active. Only persist markers
+        // that survived the headset-proximity filter so the on-disk log
+        // mirrors what the rest of the application sees.
         if (enableCSVLog && XRPositionLogger.IsTrackingActive)
         {
             if (!_csvStarted) SetupCSV();
@@ -207,6 +226,8 @@ public class UDPMarkerReceiver : MonoBehaviour
                 {
                     string[] mp = parts[i + 2].Split(',');
                     if (mp.Length < 4) continue;
+                    if (!int.TryParse(mp[0], out int loggedId)) continue;
+                    if (!activeIds.Contains(loggedId)) continue;
                     _csvWriter.WriteLine($"{t:F4},{frameId},{mp[0]},{mp[1]},{mp[2]},{mp[3]}");
                 }
             }

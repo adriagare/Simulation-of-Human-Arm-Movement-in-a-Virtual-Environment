@@ -33,6 +33,50 @@ UNITY_PORT = 5005
 # Global UDP socket for forwarding marker data to Unity
 _udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+# --- Persistence filter ---------------------------------------------------
+# OptiTrack streams every visible marker, including the eight infrared
+# markers attached to the VR headset. Those markers are detected
+# intermittently and flicker on for one or two frames at a time before
+# disappearing again. The body markers we care about (shoulder, elbow,
+# hand — three markers) are continuously tracked across many frames.
+#
+# We can therefore separate the two populations purely by temporal
+# persistence: a marker is forwarded only if a marker at roughly the
+# same position appeared in every one of the previous PERSISTENCE_FRAMES-1
+# frames. The flicker markers never accumulate enough history and are
+# silently dropped before they leave this process.
+PERSISTENCE_FRAMES = 3      # current frame + (this-1) previous frames
+POSITION_TOL_M     = 0.05   # 5 cm tolerance when matching across frames
+_marker_history: list[list[tuple[float, float, float]]] = []
+
+
+def _has_neighbour(pos, candidates, tol):
+    px, py, pz = pos
+    tol_sq = tol * tol
+    for cx, cy, cz in candidates:
+        dx, dy, dz = px - cx, py - cy, pz - cz
+        if dx * dx + dy * dy + dz * dz < tol_sq:
+            return True
+    return False
+
+
+def _filter_persistent(current_positions):
+    """Return the subset of current_positions for which a nearby marker
+    appeared in every frame of the persistence history. Updates the
+    history afterwards so the call has a single side effect."""
+    if len(_marker_history) < PERSISTENCE_FRAMES - 1:
+        kept = []
+    else:
+        kept = [
+            pos for pos in current_positions
+            if all(_has_neighbour(pos, frame, POSITION_TOL_M)
+                   for frame in _marker_history)
+        ]
+    _marker_history.append(list(current_positions))
+    while len(_marker_history) > PERSISTENCE_FRAMES - 1:
+        _marker_history.pop(0)
+    return kept
+
 # This is a callback function that gets connected to the NatNet client
 # and called once per mocap frame.
 
@@ -68,21 +112,48 @@ def receive_new_frame_with_data(data_dict):
             out_string += "/"
         print(out_string)
 
-    # Forward labeled marker data to Unity via UDP
+    # Forward labeled marker data to Unity via UDP, after dropping flicker
+    # markers (see _filter_persistent for the rationale).
     frame_number = data_dict.get("frameNumber", 0)
     mocap_data = data_dict.get("mocap_data", None)
-    if mocap_data is not None:
-        labeled_marker_data = mocap_data.labeled_marker_data
-        if labeled_marker_data is not None:
-            marker_list = labeled_marker_data.labeled_marker_list
-            if len(marker_list) > 0:
-                udp_parts = [str(frame_number), str(len(marker_list))]
-                for marker in marker_list:
-                    marker_id = marker.id_num & 0x0000FFFF
-                    pos = marker.pos
-                    udp_parts.append(f"{marker_id},{pos[0]:.6f},{pos[1]:.6f},{pos[2]:.6f}")
-                message = ";".join(udp_parts)
-                _udp_socket.sendto(message.encode("utf-8"), (UNITY_IP, UNITY_PORT))
+    if mocap_data is None:
+        return
+    labeled_marker_data = mocap_data.labeled_marker_data
+    if labeled_marker_data is None:
+        return
+    marker_list = labeled_marker_data.labeled_marker_list
+    if len(marker_list) == 0:
+        # Still update the persistence buffer so it ages out stale frames.
+        _filter_persistent([])
+        return
+
+    current_positions = [tuple(m.pos) for m in marker_list]
+    kept_positions = _filter_persistent(current_positions)
+    if not kept_positions:
+        return
+
+    # Match each kept position back to its source marker so we preserve the
+    # original IDs in the UDP message (the receiver still uses them as
+    # dictionary keys when assigning marker spheres).
+    kept_set = {(round(p[0], 6), round(p[1], 6), round(p[2], 6))
+                for p in kept_positions}
+    forwarded = []
+    for marker in marker_list:
+        key = (round(marker.pos[0], 6), round(marker.pos[1], 6),
+               round(marker.pos[2], 6))
+        if key in kept_set:
+            forwarded.append(marker)
+
+    if not forwarded:
+        return
+
+    udp_parts = [str(frame_number), str(len(forwarded))]
+    for marker in forwarded:
+        marker_id = marker.id_num & 0x0000FFFF
+        pos = marker.pos
+        udp_parts.append(f"{marker_id},{pos[0]:.6f},{pos[1]:.6f},{pos[2]:.6f}")
+    message = ";".join(udp_parts)
+    _udp_socket.sendto(message.encode("utf-8"), (UNITY_IP, UNITY_PORT))
 
 
 # This is a callback function that gets connected to the NatNet client.

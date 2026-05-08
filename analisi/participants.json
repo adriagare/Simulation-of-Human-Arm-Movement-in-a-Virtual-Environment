@@ -1,0 +1,18 @@
+{
+  "_format": "Map of participant label (lowercase first name, must match the part between 'experiment_' and the date in the CSV filename) to attribute fields used by aggregate_analysis.py for cross-participant correlations. Add an entry every time a new session is recorded.",
+  "_field_schema": {
+    "age":       "integer (years)",
+    "sex":       "F or M",
+    "height_m":  "float (meters)",
+    "vr_level":  "0 = none, 1 = occasional, 2 = experienced, 3 = expert",
+    "anxiety":   "1 = low, 2 = moderate, 3 = high (rough estimate from interview)",
+    "notes":     "free text — relevant medical history, motor history, anything worth flagging"
+  },
+  "_example": {
+    "alice": {
+      "age": 24, "sex": "F", "height_m": 1.65, "vr_level": 1, "anxiety": 2,
+      "notes": "occasional gamer, no neurological history"
+    }
+  },
+  "participants": {}
+}
