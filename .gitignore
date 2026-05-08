@@ -2,17 +2,6 @@
 #  Project-level exclusions
 # ============================================================
 
-# Markdown files at root (project notes, not for the repo)
-/CLAUDE.md
-/situation.md
-data_analysis
-data_analysis/*
-/scripts_documentation.md
-/scripts_modifiied.md
-camera_layout.md
-explicacio_calibratge.md
-lastSprintTFG.md
-
 # Thesis (kept local only)
 /Thesis/
 /ml/wheels
@@ -114,3 +103,15 @@ env/
 *.nav
 *.snm
 *.vrb
+
+# Markdown files at root (project notes, not for the repo)
+/CLAUDE.md
+/situation.md
+data_analysis
+data_analysis/*
+/scripts_documentation.md
+/scripts_modifiied.md
+camera_layout.md
+explicacio_calibratge.md
+lastSprintTFG.md
+
