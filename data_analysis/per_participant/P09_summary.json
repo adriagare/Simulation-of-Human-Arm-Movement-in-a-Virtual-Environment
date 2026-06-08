@@ -1,0 +1,73 @@
+{
+  "participant": "P09",
+  "n_probe_trials": 49,
+  "n_rest_periods": 54,
+  "n_events": 7,
+  "event_labels": {
+    "user_hesitated": 4,
+    "user_said_strange": 2,
+    "user_visibly_surprised": 1
+  },
+  "thresholds": {
+    "verbal": 24.0,
+    "behavioural": 24.0,
+    "kinematic_min": 24.0,
+    "rest_min": 24.0
+  },
+  "thresholds_per_metric": {
+    "movement_time": {
+      "threshold_deg": 72.0,
+      "p_value": 0.007936507936507936
+    },
+    "num_submovements": {
+      "threshold_deg": 72.0,
+      "p_value": 0.023809523809523808
+    },
+    "peak_speed": {
+      "threshold_deg": 32.0,
+      "p_value": 0.023809523809523808
+    },
+    "time_to_peak_norm": {
+      "threshold_deg": null,
+      "p_value": null
+    },
+    "endpoint_dev": {
+      "threshold_deg": 24.0,
+      "p_value": 0.023809523809523808
+    },
+    "path_length": {
+      "threshold_deg": null,
+      "p_value": null
+    },
+    "straightness": {
+      "threshold_deg": 32.0,
+      "p_value": 0.023809523809523808
+    },
+    "forearm_compensation_deg": {
+      "threshold_deg": 24.0,
+      "p_value": 0.023809523809523808
+    },
+    "ldlj_smoothness": {
+      "threshold_deg": 72.0,
+      "p_value": 0.007936507936507936
+    }
+  },
+  "thresholds_per_rest_metric": {
+    "rest_path_length": {
+      "threshold_deg": 24.0,
+      "p_value": 0.011904761904761904
+    },
+    "rest_settling_time": {
+      "threshold_deg": null,
+      "p_value": null
+    },
+    "rest_drift_total": {
+      "threshold_deg": 24.0,
+      "p_value": 0.023809523809523808
+    },
+    "rest_final_offset": {
+      "threshold_deg": 80.0,
+      "p_value": 0.023809523809523808
+    }
+  }
+}

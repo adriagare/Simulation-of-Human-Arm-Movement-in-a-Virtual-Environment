@@ -39,17 +39,19 @@ public class ExperimentController : MonoBehaviour
 
     [Header("Probe Phase (visuomotor detection threshold)")]
     [Tooltip("Magnitudes (deg) of the perturbation rotation applied to the displayed hand. A 0 entry serves as control.")]
-    public float[] probeAngles        = new float[] { 0f, 5f, 10f, 15f, 20f, 25f, 30f, 45f };
-    [Tooltip("Number of trials per perturbation level.")]
+    public float[] probeAngles        = new float[] { 0f, 8f, 16f, 24f, 32f, 40f, 48f, 56f, 64f, 72f, 80f };
+    [Tooltip("Number of trials per perturbation level. Per-trial increment = (level_target - level_start) / trialsPerProbeLevel, so smaller values make each trial's added rotation more salient.")]
     public int    trialsPerProbeLevel = 5;
     [Tooltip("Randomize the sign (±) of the perturbation each probe trial. Recommended on to avoid motor adaptation.")]
     public bool   randomizeProbeDirection = true;
     [Tooltip("Randomize the order of probe levels. If off, levels are presented from smallest to largest.")]
     public bool   randomizeProbeOrder     = false;
     [Tooltip("Pause between the elbow returning to the rest zone and the next probe trial starting.")]
-    public float  probeRestDelay      = 1.5f;
+    public float  probeRestDelay      = 0.5f;
     [Tooltip("Pause after each probe trial completes before advancing to the next.")]
     public float  probePostDelay      = 1.0f;
+    [Tooltip("Hand displacement (m) from the pre-cue position that counts as movement onset, used to trigger the perturbation envelope.")]
+    public float  probeMovementOnsetThreshold = 0.03f;
 
     [Header("Spontaneous-event annotations")]
     [Tooltip("Generic mark: experimenter presses this when something noteworthy happens (label = 'mark').")]
@@ -85,19 +87,20 @@ public class ExperimentController : MonoBehaviour
     [Range(0f, 1f)]
     public float silentProbability = 0.30f;  // chance a trial is silent
     public float stillnessThreshold = 0.05f; // 5 cm allowed hand drift during silent trial
-    public float firstTrialDelay    = 1.5f;  // grace period after elbow enters rest zone before first cross
+    public float firstTrialDelay      = 1.5f;  // longer grace period before the VERY first baseline trial only
+    public float subsequentTrialDelay = 0.5f;  // grace period before every other baseline trial
     public float minCrossDistFromRest = 0.25f; // min XZ distance between cross and rest-zone center
 
     [Header("Cross Spawn Area")]
-    [Tooltip("Cross is spawned at random X ∈ [xMin,xMax], Z ∈ [zMin,zMax], Y = tableSurfaceY. Bounds chosen so the user can reach any cross without leaning forward (shoulder must stay still — the NN playback assumes a frozen shoulder).")]
-    public float xMin = -0.25f;
-    public float xMax =  0.45f;
+    [Tooltip("Cross is spawned at random X ∈ [xMin,xMax], Z ∈ [zMin,zMax], Y = tableSurfaceY. Bounds restricted to the right ~70% of the table so the participant can reach every cross with the right arm without leaning the trunk; the leftmost ~30% of the table stays decorative.")]
+    public float xMin = -0.35f;
+    public float xMax =  0.65f;
     public float zMin =  0.55f;   // keep crosses away from the rest zone
     public float zMax =  0.75f;   // arm-only reach (no torso lean)
-    public float tableSurfaceY = 1.155f;
+    public float tableSurfaceY = 1.11f;
 
     [Header("Rest Zone (green rectangle, closest to user)")]
-    public Vector3 restZoneCenter = new Vector3(0f, 1.155f, 0.42f);
+    public Vector3 restZoneCenter = new Vector3(0f, 1.11f, 0.42f);
     public Vector2 restZoneSize   = new Vector2(0.30f, 0.12f);  // X, Z extents
     public float   restYTolerance = 0.15f;                        // hand-height tolerance
 
@@ -117,8 +120,10 @@ public class ExperimentController : MonoBehaviour
     private List<int> _probeOrder;          // indices into probeAngles, in presentation order
     private int   _probeOrderIdx     = 0;   // current entry in _probeOrder
     private int   _probeTrialInLevel = 0;   // 1..trialsPerProbeLevel within current level
-    private float _currentProbeAngle = 0f;  // signed angle applied this trial (deg)
-    private int   _currentProbeDir   = +1;  // ±1
+    private float _currentProbeAngle = 0f;  // total target angle for this level (deg)
+    private int   _currentProbeDir   = +1;  // ±1, but in this paradigm always +1
+    private float _levelStartDeg     = 0f;  // angle held at the start of the current level
+    private float _levelStepDeg      = 0f;  // per-trial angle increment within the level
 
     // Side-channel events log: timestamp + phase + trial + angle + label.
     private StreamWriter _eventCsv;
@@ -127,6 +132,12 @@ public class ExperimentController : MonoBehaviour
     // Countdown timer used between probe trials while waiting for the elbow
     // to settle back into the rest zone. Reset on every trial start.
     private float _probeRestHold   = 0f;
+    // Set true once the perturbation envelope has been launched for the
+    // current probe trial, so it isn't retriggered every frame.
+    private bool  _probePerturbationStarted = false;
+    // Real-hand position at the moment the cue sound plays (start of ProbeActive),
+    // used to detect movement onset.
+    private Vector3 _handAtCue;
 
     private Phase   _phase       = Phase.Idle;
     private int     _trialIndex  = -1;
@@ -197,21 +208,18 @@ public class ExperimentController : MonoBehaviour
         switch (_phase)
         {
             case Phase.WaitingForRest:
+                // Apply a rest-zone hold before every trial. The very first
+                // trial of the entire experiment uses the longer
+                // `firstTrialDelay`; all subsequent baseline trials use the
+                // shorter `subsequentTrialDelay`.
                 if (HandInRestZone())
                 {
-                    if (_trialIndex == 0)
-                    {
-                        _firstTrialHold -= Time.deltaTime;
-                        if (_firstTrialHold <= 0f) StartNextTrial();
-                    }
-                    else
-                    {
-                        StartNextTrial();
-                    }
+                    _firstTrialHold -= Time.deltaTime;
+                    if (_firstTrialHold <= 0f) StartNextTrial();
                 }
                 else
                 {
-                    _firstTrialHold = firstTrialDelay;  // reset if elbow leaves
+                    _firstTrialHold = (_trialIndex == 0) ? firstTrialDelay : subsequentTrialDelay;
                 }
                 break;
 
@@ -249,7 +257,13 @@ public class ExperimentController : MonoBehaviour
                 {
                     _trialIndex++;
                     if (_trialIndex >= _trialTarget) EndExperiment();
-                    else _phase = Phase.WaitingForRest;
+                    else
+                    {
+                        _phase = Phase.WaitingForRest;
+                        // After the first trial we always use the short hold,
+                        // since _trialIndex has just been incremented past 0.
+                        _firstTrialHold = subsequentTrialDelay;
+                    }
                 }
                 break;
 
@@ -277,9 +291,32 @@ public class ExperimentController : MonoBehaviour
 
             case Phase.ProbeActive:
                 _phaseTimer -= Time.deltaTime;
-                // Hit detection uses the REAL hand so success isn't biased by
-                // the visual perturbation. Trial ends on hit or hitTimeout.
-                if (RealHandInsideCross())   { EndProbeTrial(true); }
+                // Defer the perturbation until the user actually starts moving
+                // — applying it while the hand is still makes the visual jump
+                // immediately noticeable. Once movement onset is detected, the
+                // envelope blends into the natural reach.
+                // Each trial adds `_levelStepDeg` to the held perturbation,
+                // ramped over the user's spatial progress toward the cross.
+                // Spreading the level delta across all five trials (instead
+                // of dumping it into the first) keeps every per-trial step
+                // small enough to ride under the user's perceptual radar.
+                if (!_probePerturbationStarted
+                    && arm != null && arm.IsTracking
+                    && Vector3.Distance(arm.RealHandPositionUnity, _handAtCue) > probeMovementOnsetThreshold)
+                {
+                    float trialTargetDeg = _levelStartDeg + _levelStepDeg * (_probeTrialInLevel + 1);
+                    playback.BeginMovementRamp(_crossPos, _handAtCue, trialTargetDeg,
+                                               detectionRadius, OnProbeMovementDone);
+                    _probePerturbationStarted = true;
+                    Debug.Log($"[Exp/Probe] Trial ramp  level {_probeOrderIdx + 1}/{_probeOrder.Count} " +
+                              $"trial {_probeTrialInLevel + 1}/{trialsPerProbeLevel}  " +
+                              $"{playback.CurrentPerturbationDeg:+0.0;-0.0}° → {trialTargetDeg:+0.0;-0.0}°");
+                }
+                // Hit detection uses the DISPLAYED (perturbed) hand: the
+                // participant must compensate for the visual rotation to
+                // visually land on the cross. The real marker is logged
+                // separately for offline analysis.
+                if (HandInsideCross())       { EndProbeTrial(true); }
                 else if (_phaseTimer <= 0f)  { EndProbeTrial(false); }
                 break;
 
@@ -406,18 +443,33 @@ public class ExperimentController : MonoBehaviour
         _phase             = Phase.ProbeWaitRest;
         _probeRestHold     = probeRestDelay;
 
+        // Engage the playback at 0° from the start of the probe phase. The
+        // displayed perturbation will then build up by ramping at the first
+        // trial of each new level and be held during the level's remaining
+        // trials (so the user does not perceive a sudden jump back to 0
+        // between trials).
+        playback.BeginHold(0f);
+
         Debug.Log($"[Exp/Probe] Starting probe phase: {probeAngles.Length} levels × {trialsPerProbeLevel} trials.");
     }
 
     private void BeginProbeTrial()
     {
-        // Pick the angle and direction for this trial
-        int angleIdx = _probeOrder[_probeOrderIdx];
-        float magnitude = Mathf.Abs(probeAngles[angleIdx]);
-        _currentProbeDir   = randomizeProbeDirection ? (Random.value < 0.5f ? -1 : +1) : +1;
-        _currentProbeAngle = magnitude * _currentProbeDir;
-
-        playback.SetPerturbation(_currentProbeAngle);
+        // At the start of a level, capture the held angle as the level's
+        // baseline and split the level's TOTAL increment evenly across its
+        // trials. Each trial then ramps by `_levelStepDeg` during the
+        // user's reach — far less detectable than landing the entire
+        // level delta in a single trial. Direction is fixed (always +1):
+        // alternating signs would partially cancel and erase the
+        // cumulative displacement that this paradigm relies on.
+        if (_probeTrialInLevel == 0)
+        {
+            int angleIdx = _probeOrder[_probeOrderIdx];
+            _currentProbeDir   = +1;
+            _currentProbeAngle = Mathf.Abs(probeAngles[angleIdx]) * _currentProbeDir;
+            _levelStartDeg     = playback != null ? playback.CurrentPerturbationDeg : 0f;
+            _levelStepDeg      = (_currentProbeAngle - _levelStartDeg) / Mathf.Max(1, trialsPerProbeLevel);
+        }
 
         _crossPos    = RandomCrossPosition();
         _crossGO     = SpawnCross(_crossPos);
@@ -430,18 +482,22 @@ public class ExperimentController : MonoBehaviour
 
         Debug.Log($"[Exp/Probe] Level {_probeOrderIdx + 1}/{_probeOrder.Count} " +
                   $"(θ = {_currentProbeAngle:+0.0;-0.0}°)  " +
-                  $"trial {_probeTrialInLevel + 1}/{trialsPerProbeLevel}");
+                  $"trial {_probeTrialInLevel + 1}/{trialsPerProbeLevel}  " +
+                  $"held = {(playback != null ? playback.CurrentPerturbationDeg : 0f):+0.0;-0.0}°  " +
+                  $"willRamp = {_probeTrialInLevel == 0}");
     }
 
     private void StartProbeMovement()
     {
         _phase      = Phase.ProbeActive;
         _phaseTimer = hitTimeout;
+        _handAtCue  = (arm != null && arm.IsTracking) ? arm.RealHandPositionUnity : Vector3.zero;
+        _probePerturbationStarted = false;
         Play(startClip);
-        // Playback shapes the visual mismatch on top of the user's real hand.
-        // Its completion callback only fires if the envelope finishes before
-        // the user reaches the cross or the hit timeout elapses.
-        playback.Play(_crossPos, OnProbeMovementDone);
+        // Perturbation playback is NOT launched here; it fires from the
+        // ProbeActive case once the real hand crosses the movement-onset
+        // threshold, so the visual rotation rides the natural reach instead
+        // of being applied while the arm is still and easy to detect.
     }
 
     private void OnProbeMovementDone()
@@ -453,7 +509,9 @@ public class ExperimentController : MonoBehaviour
 
     private void EndProbeTrial(bool hit)
     {
-        if (playback != null && playback.IsPlaying) playback.Stop();
+        // Do NOT release the playback hold here — the perturbation must
+        // persist across the level's remaining trials. It is only released
+        // by EndProbe at the end of the entire probe phase.
         if (hit) { Play(itempickerClip); _score++; }
         else     { Play(wrongClip); }
         _trialScored = true;
@@ -490,7 +548,7 @@ public class ExperimentController : MonoBehaviour
     private void EndProbe()
     {
         Debug.Log("[Exp/Probe] Probe phase finished.");
-        playback?.SetPerturbation(0f);
+        playback?.ReleaseHold();
         DestroyRestZone();
         CloseCSV();
         _phase = Phase.ProbeDone;

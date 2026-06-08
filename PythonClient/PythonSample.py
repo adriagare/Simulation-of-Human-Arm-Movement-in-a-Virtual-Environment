@@ -35,18 +35,19 @@ _udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # --- Persistence filter ---------------------------------------------------
 # OptiTrack streams every visible marker, including the eight infrared
-# markers attached to the VR headset. Those markers are detected
-# intermittently and flicker on for one or two frames at a time before
-# disappearing again. The body markers we care about (shoulder, elbow,
-# hand — three markers) are continuously tracked across many frames.
+# markers attached to the VR headset. Those markers flicker on for one
+# or two frames before disappearing. The body markers (shoulder, elbow,
+# hand) are continuously tracked across many frames.
 #
-# We can therefore separate the two populations purely by temporal
-# persistence: a marker is forwarded only if a marker at roughly the
-# same position appeared in every one of the previous PERSISTENCE_FRAMES-1
-# frames. The flicker markers never accumulate enough history and are
-# silently dropped before they leave this process.
-PERSISTENCE_FRAMES = 3      # current frame + (this-1) previous frames
-POSITION_TOL_M     = 0.05   # 5 cm tolerance when matching across frames
+# A marker is forwarded only if one at roughly the same position appeared
+# in every one of the previous PERSISTENCE_FRAMES-1 frames. With value 2,
+# only one previous frame is required: a body marker briefly occluded
+# (head turning, arm rotation) is back online after a single gap frame
+# (~10 ms at 100 Hz), while flicker markers from the headset, which jump
+# to different spots each appearance, still don't accumulate enough
+# history to slip through.
+PERSISTENCE_FRAMES = 2      # current frame + 1 previous frame
+POSITION_TOL_M     = 0.08   # 8 cm tolerance — lets fast hand reaches stay matched between frames
 _marker_history: list[list[tuple[float, float, float]]] = []
 
 
@@ -306,34 +307,12 @@ if __name__ == "__main__":
     print("NatNet Python Client 4.4")
     print(f"UDP forwarding to Unity: {UNITY_IP}:{UNITY_PORT}\n")
 
-    # Select Multicast or Unicast
-    cast_choice = input("Select 0 for multicast and 1 for unicast: ")
-    cast_choice = int(cast_choice)
-    while cast_choice != 0 and cast_choice != 1:
-        cast_choice = input("Invalid option. Select 0 for multicast or 1 for unicast: ") #type: ignore  # noqa F501
-        cast_choice = int(cast_choice)
-    # establishes multicast or unicast
-    if cast_choice == 0:
-        optionsDict["use_multicast"] = True
-    else:
-        optionsDict["use_multicast"] = False
-    streaming_client.set_use_multicast(optionsDict["use_multicast"])
-
-    # allows user to set local address:
-    client_addr_choice = input("Client Address (127.0.0.1): ")
-    if client_addr_choice != "":
-        streaming_client.set_client_address(client_addr_choice)
-
-    # allows user to set remote address
-    server_addr_choice = input("Server Address (127.0.0.1): ")
-    if server_addr_choice != "":
-        streaming_client.set_server_address(server_addr_choice)
-
-    # select datastream preference
-    stream_choice = None
-    while stream_choice != 'd' and stream_choice != 'c':
-        stream_choice = input("Select d for datastream and c for command stream: ") #type: ignore  # noqa F501
-    optionsDict["stream_type"] = stream_choice
+    # Hardcoded defaults: multicast, localhost, datastream. Skips the
+    # interactive prompts the original sample required at startup.
+    optionsDict["use_multicast"] = True
+    optionsDict["stream_type"]   = "d"
+    streaming_client.set_use_multicast(True)
+    print("Using: multicast, client=127.0.0.1, server=127.0.0.1, stream=datastream")
 
     # Start up the streaming client now that the callbacks are set up.
     # This will run perpetually, and operate on a separate thread.

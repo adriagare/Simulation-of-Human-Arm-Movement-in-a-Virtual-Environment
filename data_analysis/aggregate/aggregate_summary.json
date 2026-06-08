@@ -1,0 +1,97 @@
+{
+  "n_participants": 10,
+  "threshold_stats": {
+    "kinematic": {
+      "n_detected": 10,
+      "mean": 17.6,
+      "median": 16.0,
+      "std": 8.262364471909157,
+      "min": 8.0,
+      "max": 32.0
+    },
+    "behavioural": {
+      "n_detected": 10,
+      "mean": 26.4,
+      "median": 28.0,
+      "std": 16.02220681151979,
+      "min": 0.0,
+      "max": 56.0
+    },
+    "rest": {
+      "n_detected": 7,
+      "mean": 35.42857142857143,
+      "median": 40.0,
+      "std": 22.559972982084464,
+      "min": 8.0,
+      "max": 64.0
+    },
+    "verbal": {
+      "n_detected": 10,
+      "mean": 53.6,
+      "median": 60.0,
+      "std": 18.875027593798816,
+      "min": 24.0,
+      "max": 72.0
+    }
+  },
+  "by_gender": [
+    {
+      "Genere": "Femeni",
+      "count": 4,
+      "mean": 20.0,
+      "std": 10.327955589886445
+    },
+    {
+      "Genere": "Masculi",
+      "count": 6,
+      "mean": 16.0,
+      "std": 7.155417527999327
+    }
+  ],
+  "by_handedness": [
+    {
+      "Ma_dominant": "Ambidextre",
+      "count": 1,
+      "mean": 8.0,
+      "std": NaN
+    },
+    {
+      "Ma_dominant": "Dreta",
+      "count": 6,
+      "mean": 18.666666666666668,
+      "std": 9.688481133111974
+    },
+    {
+      "Ma_dominant": "Esquerra",
+      "count": 3,
+      "mean": 18.666666666666668,
+      "std": 4.618802153517006
+    }
+  ],
+  "by_vr_exp": [
+    {
+      "Experiencia_VR": "Cap",
+      "count": 3,
+      "mean": 16.0,
+      "std": 8.0
+    },
+    {
+      "Experiencia_VR": "Habitual",
+      "count": 1,
+      "mean": 24.0,
+      "std": NaN
+    },
+    {
+      "Experiencia_VR": "Moderada",
+      "count": 1,
+      "mean": 16.0,
+      "std": NaN
+    },
+    {
+      "Experiencia_VR": "Poca",
+      "count": 5,
+      "mean": 17.6,
+      "std": 10.430723848324238
+    }
+  ]
+}

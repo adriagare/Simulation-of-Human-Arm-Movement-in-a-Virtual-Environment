@@ -25,9 +25,12 @@ public class UDPMarkerReceiver : MonoBehaviour
     [Tooltip("Radius of each marker sphere.")]
     public float markerRadius = 0.015f;
 
+    [Tooltip("Vertical offset (m) added ONLY to the debug spheres so they sit on top of the table surface instead of being half-buried by the marker radius. Has no effect on the position fed to ArmModelController, hit detection or CSV logging.")]
+    public float markerVisualYOffset = 0.02f;
+
     [Header("Headset proximity filter")]
-    [Tooltip("Markers within this radius of the main camera (the user's head) are dropped. The Python client already filters flicker markers by temporal persistence; this is a safety net for anything that slips through.")]
-    public float headsetExclusionRadius = 0.30f;
+    [Tooltip("Markers within this radius (m) of the main camera are dropped. Set to 0 to disable. The Python client already filters headset flicker markers by temporal persistence, so this is only a defensive secondary filter; an aggressive radius blocks legitimate hand markers brought close to the face during testing.")]
+    public float headsetExclusionRadius = 0f;
 
     [Header("CSV Logging")]
     [Tooltip("Enable OptiTrack marker CSV logging (starts when headset tracking is active).")]
@@ -59,6 +62,9 @@ public class UDPMarkerReceiver : MonoBehaviour
 
     // Reference to coordinate synchronizer
     private CoordinateSynchronizer _synchronizer;
+    // Once the participant activates arm mode (presses O), the raw marker
+    // spheres are forcibly hidden so they don't pollute the experiment view.
+    private ArmModelController _armController;
 
     private static readonly Color[] MarkerColors = new Color[]
     {
@@ -77,7 +83,8 @@ public class UDPMarkerReceiver : MonoBehaviour
 
     void Start()
     {
-        _synchronizer = FindFirstObjectByType<CoordinateSynchronizer>();
+        _synchronizer  = FindFirstObjectByType<CoordinateSynchronizer>();
+        _armController = FindFirstObjectByType<ArmModelController>();
         StartUDPListener();
     }
 
@@ -206,12 +213,20 @@ public class UDPMarkerReceiver : MonoBehaviour
                 sphere.GetComponent<Renderer>().material.color = MarkerColors[colorIdx];
                 _markerObjects[markerId] = sphere;
             }
-            sphere.transform.position = displayPos;
+            // Visual lift only: bottom of the sphere rests on the table
+            // surface instead of half-piercing it. The raw displayPos still
+            // drives downstream consumers (arm rig, hit detection, CSV).
+            sphere.transform.position = displayPos + Vector3.up * markerVisualYOffset;
         }
 
-        // Hide spheres for markers no longer visible
+        // Hide spheres for markers no longer visible. Additionally, once
+        // arm mode is active (participant pressed O) ALL marker spheres
+        // are forcibly hidden — the rigged arm conveys joint positions,
+        // and the raw OptiTrack markers would otherwise float visibly
+        // around the participant's hand throughout the experiment.
+        bool armModeActive = _armController != null && _armController.IsArmModeActive;
         foreach (var kvp in _markerObjects)
-            kvp.Value.SetActive(activeIds.Contains(kvp.Key));
+            kvp.Value.SetActive(!armModeActive && activeIds.Contains(kvp.Key));
 
         // Log to CSV once headset tracking is active. Only persist markers
         // that survived the headset-proximity filter so the on-disk log

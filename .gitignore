@@ -1,93 +1,99 @@
 # ============================================================
-#  Project-level exclusions
+#  TFG - Simulation of Human Arm Movement in a Virtual Environment
+#  .gitignore
+# ============================================================
+#  Estrategia: per defecte excloem-ho TOT i tornem a incloure
+#  explicitament les carpetes/fitxers que volem versionar.
 # ============================================================
 
-# Thesis (kept local only)
-/Thesis/
-/ml/wheels
-LAB.md
-human_description.md
-# Claude Code agent and skill configs
-/.claude/
-/.agents/
-/skills-lock.json
-unityproject/Positions/*
-# OS junk
+# --- Per defecte, ignorem tot el contingut del repositori ---
+/*
+
+# --- Permetem fitxers de top-level imprescindibles ---
+!/.gitignore
+!/README.md
+!/LICENSE
+/CODI.md
+
+# ============================================================
+#  Carpetes que volem versionar SENCERES
+# ============================================================
+!/analisi
+!/data_analysis
+!/PythonClient
+
+# --- analisi/ : tot, pero sense caches Python ---
+analisi/__pycache__/
+analisi/**/__pycache__/
+analisi/*.pyc
+
+# --- data_analysis/ : tot ---
+
+# --- PythonClient/ : tot, pero sense caches Python ---
+PythonClient/__pycache__/
+PythonClient/**/__pycache__/
+PythonClient/*.pyc
+
+# ============================================================
+#  exp/ - nomes la carpeta example_data anonimitzada
+# ============================================================
+!/exp
+exp/*
+!exp/example_data
+!exp/example_data/**
+
+# ============================================================
+#  Thesis/ - nomes els dos PDFs finals
+# ============================================================
+!/Thesis
+Thesis/*
+!Thesis/CAT_Thesis.pdf
+!Thesis/CAT_Manual_Participant.pdf
+
+# ============================================================
+#  unityproject/ - nomes el codi font i la configuracio
+#                  (Library/, Logs/, builds, IDE files exclosos)
+# ============================================================
+!/unityproject
+unityproject/*
+
+# Carpetes imprescindibles per reproduir el projecte
+!unityproject/Assets
+!unityproject/Assets/**
+!unityproject/Packages
+!unityproject/Packages/**
+!unityproject/ProjectSettings
+!unityproject/ProjectSettings/**
+
+# Dins Assets/ excloem fitxers que no han d'anar al repo
+unityproject/Assets/**/*.meta.bak
+unityproject/Assets/AssetStoreTools*
+
+# ============================================================
+#  Sistema operatiu i editors (s'ignoren sempre)
+# ============================================================
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# IDE
 .vscode/
 .idea/
 *.swp
 *~
+*.tmp
 
 # ============================================================
-#  Unity (unityproject/)
+#  Python (en qualsevol punt del projecte)
 # ============================================================
-
-# Auto-generated build / cache folders
-unityproject/[Ll]ibrary/
-unityproject/[Tt]emp/
-unityproject/[Oo]bj/
-unityproject/[Bb]uild/
-unityproject/[Bb]uilds/
-unityproject/[Ll]ogs/
-unityproject/[Uu]ser[Ss]ettings/
-unityproject/[Mm]emoryCaptures/
-unityproject/[Rr]ecordings/
-
-# Old / superseded log folder
-unityproject/LogData/
-
-# Decorative assets not used by the build
-unityproject/deco/
-
-# Auto-generated Visual Studio / Rider files
-unityproject/*.csproj
-unityproject/*.sln
-unityproject/*.slnx
-unityproject/*.suo
-unityproject/*.user
-unityproject/*.userprefs
-unityproject/*.unityproj
-unityproject/*.vsconfig
-unityproject/*.pidb
-unityproject/*.booproj
-unityproject/*.svd
-unityproject/.vs/
-unityproject/ExportedObj/
-unityproject/.consulo/
-unityproject/*.tmp
-unityproject/*.apk
-unityproject/*.aab
-unityproject/*.unitypackage
-unityproject/*.app
-
-# Unity crash reports
-unityproject/sysinfo.txt
-unityproject/crashlytics-build.properties
-
-# Asset meta files for ignored folders shouldn't leak
-unityproject/Assets/AssetStoreTools*
-
-# ============================================================
-#  Python
-# ============================================================
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
 .venv/
 venv/
 env/
 .pytest_cache/
 
 # ============================================================
-#  LaTeX (just in case any aux files end up at root)
+#  LaTeX auxiliars (no s'han de versionar)
 # ============================================================
 *.aux
 *.bbl
@@ -103,15 +109,4 @@ env/
 *.nav
 *.snm
 *.vrb
-
-# Markdown files at root (project notes, not for the repo)
-/CLAUDE.md
-/situation.md
-data_analysis
-data_analysis/*
-/scripts_documentation.md
-/scripts_modifiied.md
-camera_layout.md
-explicacio_calibratge.md
-lastSprintTFG.md
-
+texput.log

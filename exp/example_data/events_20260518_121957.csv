@@ -1,0 +1,8 @@
+time,trial,phase,probe_level,probe_angle,label
+2.7334,40,ProbeWaitRest,6,40.00,user_hesitated
+0.8667,40,ProbePreCue,6,40.00,user_hesitated
+0.1669,40,ProbePreCue,8,56.00,user_hesitated
+0.4001,40,ProbePreCue,9,64.00,user_visibly_surprised
+3.8890,40,ProbeWaitRest,9,64.00,user_hesitated
+7.4223,40,ProbeWaitRest,10,64.00,user_said_strange
+2.0446,40,ProbePost,11,80.00,user_said_strange

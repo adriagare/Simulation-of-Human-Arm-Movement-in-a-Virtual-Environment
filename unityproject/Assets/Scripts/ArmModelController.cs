@@ -41,7 +41,8 @@ public class ArmModelController : MonoBehaviour
     public float markerLossTimeout = 2.0f;
 
     [Header("Debug")]
-    public bool showJointSpheres = true;
+    [Tooltip("Disabled by code regardless of this value — the spheres pollute the first-person view during the experiment.")]
+    public bool showJointSpheres = false;
 
     [Header("Status (read-only)")]
     [SerializeField] private bool armModeActive = false;
@@ -109,10 +110,15 @@ public class ArmModelController : MonoBehaviour
     public void SetPlaybackHand(Vector3 handPos)
     {
         if (!_playbackActive) return;
-        _jointTargets[SHOULDER] = _playbackShoulder;
+        // Shoulder and elbow follow the live markers so the visible arm
+        // translates with the participant; only the wrist (hand) is
+        // displaced by the perturbation. This avoids the rendered arm
+        // drifting away from the real body when the participant shifts.
+        _jointTargets[SHOULDER] = _realInitialized ? _realJoints[SHOULDER] : _playbackShoulder;
+        _jointTargets[ELBOW]    = _realInitialized ? _realJoints[ELBOW]
+                                                   : ResolveElbowIK(_playbackShoulder, handPos,
+                                                                    _playbackUpperArmLen, _playbackForearmLen);
         _jointTargets[HAND]     = handPos;
-        _jointTargets[ELBOW]    = ResolveElbowIK(_playbackShoulder, handPos,
-                                                 _playbackUpperArmLen, _playbackForearmLen);
     }
 
     private Vector3 ResolveElbowIK(Vector3 shoulder, Vector3 hand, float l1, float l2)
@@ -138,12 +144,14 @@ public class ArmModelController : MonoBehaviour
 
     private const int SHOULDER = 0, ELBOW = 1, HAND = 2;
 
-    // Anatomical offset applied at the render stage to translate the rear-
-    // upper shoulder marker into the underlying joint centre. Expressed in
-    // the participant's body frame: x = right, y = up, z = forward (gaze).
-    // Shoulder marker is mounted on the upper-rear of the deltoid; the
-    // joint sits roughly 5 cm below and 10 cm in front of the marker.
-    private static readonly Vector3 SHOULDER_OFFSET_LOCAL = new Vector3(0f, -0.05f, 0.10f);
+    // Anatomical offset applied at the render stage to translate the
+    // shoulder marker into the underlying joint centre. Currently disabled
+    // (zero) because combined with the forced hand/elbow bone snap below
+    // it stretched the upper-arm mesh past what the skinning could absorb,
+    // producing a visible gap between the upper arm and the forearm. If a
+    // visual offset is re-enabled, the bone scaling logic also needs to
+    // adapt the upper-arm length to keep the elbow in the right place.
+    private static readonly Vector3 SHOULDER_OFFSET_LOCAL = Vector3.zero;
 
     private UDPMarkerReceiver _receiver;
     private CoordinateSynchronizer _synchronizer;
@@ -167,6 +175,12 @@ public class ArmModelController : MonoBehaviour
     private Vector3    _shoulderBindOffset;
     private Quaternion _upperArmBindLocalRot;
     private Quaternion _forearmBindLocalRot;
+    private Vector3    _handBindLocalPos;
+    // Local axis of each bone that was closest to world-up at bind. Used to
+    // resolve the twist (roll) ambiguity of Quaternion.FromToRotation, so
+    // the forearm/hand keep a "palm-down" orientation as the arm moves laterally.
+    private Vector3    _upperArmRollAxisLocal = Vector3.up;
+    private Vector3    _forearmRollAxisLocal  = Vector3.up;
     private Quaternion _upperArmSmoothedRot;
     private Quaternion _forearmSmoothedRot;
     private bool       _boneRotInitialized;
@@ -183,6 +197,19 @@ public class ArmModelController : MonoBehaviour
 
     void Start()
     {
+        // Force-disable the debug spheres regardless of any serialized
+        // Inspector value. They are visually noisy in first-person VR and
+        // we never want them on during an experiment session.
+        showJointSpheres = false;
+
+        // Defensive cleanup: destroy any leftover joint sphere GameObjects
+        // that may have been saved into the scene during prior sessions.
+        for (int i = transform.childCount - 1; i >= 0; i--)
+        {
+            Transform c = transform.GetChild(i);
+            if (c.name.StartsWith("Joint_")) Destroy(c.gameObject);
+        }
+
         _receiver     = FindFirstObjectByType<UDPMarkerReceiver>();
         _synchronizer = FindFirstObjectByType<CoordinateSynchronizer>();
 
@@ -562,6 +589,9 @@ public class ArmModelController : MonoBehaviour
         _shoulderBindOffset    = _upperArmBone.position - _modelInstance.transform.position;
         _upperArmBindLocalRot  = _upperArmBone.localRotation;
         _forearmBindLocalRot   = _forearmBone.localRotation;
+        _handBindLocalPos      = _handBone.localPosition;
+        _upperArmRollAxisLocal = PickRollAxis(_upperArmBone.rotation);
+        _forearmRollAxisLocal  = PickRollAxis(_forearmBone.rotation);
 
         HideNonArmParts();
 
@@ -613,69 +643,75 @@ public class ArmModelController : MonoBehaviour
 
     private void UpdateRiggedModel()
     {
-        // Translate the shoulder marker to the anatomical joint centre so
-        // the upper arm comes out of the actual shoulder rather than the
-        // back of the user. Elbow and hand markers are co-located with
-        // their joints, so no offset there.
-        Vector3 shoulder = _jointSmoothed[SHOULDER] + AnatomicalShoulderOffsetWorld();
+        Vector3 shoulder = _jointSmoothed[SHOULDER];
         Vector3 elbow    = _jointSmoothed[ELBOW];
         Vector3 hand     = _jointSmoothed[HAND];
 
-        // 1. Position model so upper-arm bone lands at the shifted shoulder.
+        // 1. Position model so upper-arm bone lands at the shoulder marker.
         _modelInstance.transform.position = shoulder - _shoulderBindOffset;
 
-        // 2. Reset bones to bind pose to compute the *target* rotations
+        // 2. Reset bones to bind pose (undo last frame's rotations + the
+        //    end-of-frame hand snap, which would otherwise drift the curDir
+        //    sample below frame after frame and cause the arm to spin).
         _upperArmBone.localRotation = _upperArmBindLocalRot;
         _forearmBone.localRotation  = _forearmBindLocalRot;
+        _handBone.localPosition     = _handBindLocalPos;
 
-        // 3. Target upper-arm rotation: swing-only (shortest arc from bind dir to shoulder→elbow)
-        Quaternion upperTarget = _upperArmBone.rotation;
+        // 3. Rotate upper arm so it points from shoulder toward elbow.
         Vector3 curDir = (_forearmBone.position - _upperArmBone.position).normalized;
-        Vector3 tgtDir = (elbow - shoulder).normalized;
-        if (curDir.sqrMagnitude > 0.001f && tgtDir.sqrMagnitude > 0.001f)
-            upperTarget = Quaternion.FromToRotation(curDir, tgtDir) * _upperArmBone.rotation;
+        Vector3 upperDir = (elbow - shoulder).normalized;
+        if (curDir.sqrMagnitude > 0.001f && upperDir.sqrMagnitude > 0.001f)
+            _upperArmBone.rotation = Quaternion.FromToRotation(curDir, upperDir) * _upperArmBone.rotation;
+        StabilizeBoneRoll(_upperArmBone, upperDir, _upperArmRollAxisLocal);
 
-        // Apply upper-arm target provisionally so forearm bind-pose position updates
-        _upperArmBone.rotation = upperTarget;
-        _forearmBone.localRotation = _forearmBindLocalRot;
-
-        // 4. Target forearm rotation: swing-only (bind dir → elbow→hand)
-        Quaternion forearmTarget = _forearmBone.rotation;
+        // 4. Rotate forearm so it points from elbow toward hand
+        //    (forearm has moved because it's a child of upper arm).
         curDir = (_handBone.position - _forearmBone.position).normalized;
-        tgtDir = (hand - elbow).normalized;
-        if (curDir.sqrMagnitude > 0.001f && tgtDir.sqrMagnitude > 0.001f)
-            forearmTarget = Quaternion.FromToRotation(curDir, tgtDir) * _forearmBone.rotation;
+        Vector3 foreDir = (hand - elbow).normalized;
+        if (curDir.sqrMagnitude > 0.001f && foreDir.sqrMagnitude > 0.001f)
+            _forearmBone.rotation = Quaternion.FromToRotation(curDir, foreDir) * _forearmBone.rotation;
+        StabilizeBoneRoll(_forearmBone, foreDir, _forearmRollAxisLocal);
 
-        // 5. Slerp bone rotations toward targets — this absorbs the residual
-        //    twist caused by marker jitter (the roll axis is under-constrained
-        //    with only 3 positional markers, so any high-frequency change in
-        //    tgtDir would otherwise manifest as visible twist).
-        if (!_boneRotInitialized)
+        // The hand bone is intentionally NOT snapped to the hand marker:
+        // forcing _handBone.position = hand stretches the wrist mesh past
+        // what the skinning can absorb and tears it from the forearm. We
+        // accept a small offset between the visible hand and the table
+        // surface in exchange for a continuous arm.
+    }
+
+    // Removes the roll ambiguity left by Quaternion.FromToRotation by rotating
+    // around the bone's length axis so the chosen local "up" axis projects onto
+    // world up. Without this, lateral motions of the hand visibly twist it.
+    private static void StabilizeBoneRoll(Transform bone, Vector3 lengthDir, Vector3 rollAxisLocal)
+    {
+        if (lengthDir.sqrMagnitude < 1e-4f) return;
+        Vector3 currentUpWorld = bone.rotation * rollAxisLocal;
+        Vector3 currentProj    = Vector3.ProjectOnPlane(currentUpWorld, lengthDir);
+        Vector3 desiredProj    = Vector3.ProjectOnPlane(Vector3.up,    lengthDir);
+        if (currentProj.sqrMagnitude < 1e-4f || desiredProj.sqrMagnitude < 1e-4f) return;
+        float twist = Vector3.SignedAngle(currentProj.normalized, desiredProj.normalized, lengthDir);
+        bone.rotation = Quaternion.AngleAxis(twist, lengthDir) * bone.rotation;
+    }
+
+    // Returns the local unit axis (±X, ±Y, ±Z) whose direction in world space
+    // at bind pose was most aligned with world +Y. That axis is the natural
+    // "up" reference for the bone, used by StabilizeBoneRoll.
+    private static Vector3 PickRollAxis(Quaternion bindWorldRot)
+    {
+        Vector3[] cands = { Vector3.right, Vector3.up, Vector3.forward };
+        float bestAbs = -1f;
+        Vector3 best  = Vector3.up;
+        for (int i = 0; i < 3; i++)
         {
-            _upperArmSmoothedRot = upperTarget;
-            _forearmSmoothedRot  = forearmTarget;
-            _boneRotInitialized  = true;
+            Vector3 world = bindWorldRot * cands[i];
+            float dot     = Vector3.Dot(world, Vector3.up);
+            if (Mathf.Abs(dot) > bestAbs)
+            {
+                bestAbs = Mathf.Abs(dot);
+                best    = dot >= 0 ? cands[i] : -cands[i];
+            }
         }
-        else
-        {
-            float tr = rotationSmoothSpeed > 0 ? Time.deltaTime * rotationSmoothSpeed : 1f;
-            _upperArmSmoothedRot = Quaternion.Slerp(_upperArmSmoothedRot, upperTarget, tr);
-            _forearmSmoothedRot  = Quaternion.Slerp(_forearmSmoothedRot,  forearmTarget, tr);
-        }
-
-        _upperArmBone.rotation = _upperArmSmoothedRot;
-        _forearmBone.rotation  = _forearmSmoothedRot;
-
-        // 6. Snap the forearm and hand bones onto the elbow and hand
-        //    markers AFTER rotation. The bind-pose bone lengths rarely
-        //    match the participant's real arm dimensions, so without this
-        //    override the visual hand floats at bind_forearm_length from
-        //    the elbow instead of where the marker actually is. The mesh
-        //    skinning stretches to bridge the gap. This guarantees that
-        //    the rendered hand always sits exactly on the marker — a hard
-        //    requirement of the experimental protocol.
-        _forearmBone.position = elbow;
-        _handBone.position    = hand;
+        return best;
     }
 
     // Body-local (right, up, gaze-forward) axis frame derived from the
@@ -708,7 +744,7 @@ public class ArmModelController : MonoBehaviour
         _primHand.name = "Hand";
         _primHand.transform.SetParent(transform);
         Destroy(_primHand.GetComponent<Collider>());
-        _primHand.GetComponent<Renderer>().material.color = handColor;
+        ApplyMatColor(_primHand.GetComponent<Renderer>().material, handColor);
     }
 
     private GameObject MakeCapsule(string name, Color color)
@@ -717,15 +753,21 @@ public class ArmModelController : MonoBehaviour
         g.name = name;
         g.transform.SetParent(transform);
         Destroy(g.GetComponent<Collider>());
-        g.GetComponent<Renderer>().material.color = color;
+        ApplyMatColor(g.GetComponent<Renderer>().material, color);
         return g;
+    }
+
+    // URP uses "_BaseColor"; legacy Standard uses "_Color" exposed as material.color.
+    // Set both so the primitive arm is correctly tinted on either pipeline.
+    private static void ApplyMatColor(Material mat, Color color)
+    {
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", color);
+        mat.color = color;
     }
 
     private void UpdatePrimitives()
     {
-        // Match the rigged-model branch: shoulder marker is shifted to the
-        // anatomical joint; elbow and hand stay at their markers.
-        Vector3 shoulder = _jointSmoothed[SHOULDER] + AnatomicalShoulderOffsetWorld();
+        Vector3 shoulder = _jointSmoothed[SHOULDER];
         Vector3 elbow    = _jointSmoothed[ELBOW];
         Vector3 hand     = _jointSmoothed[HAND];
 
@@ -754,6 +796,10 @@ public class ArmModelController : MonoBehaviour
 
     private void CreateJointSpheres()
     {
+        // Joint debug spheres are not created at runtime — they polluted the
+        // first-person view and the visible rigged arm already conveys joint
+        // positions. The fields are kept null and UpdateJointSpheres no-ops.
+        if (!showJointSpheres) return;
         _shoulderSphere = MakeJointSphere("Joint_Shoulder", Color.red);
         _elbowSphere    = MakeJointSphere("Joint_Elbow",    new Color(1f, 0.7f, 0.2f));
         _handSphere     = MakeJointSphere("Joint_Hand",     Color.green);
@@ -772,11 +818,16 @@ public class ArmModelController : MonoBehaviour
 
     private void UpdateJointSpheres()
     {
-        if (showJointSpheres)
+        // Re-evaluate visibility every frame so the Inspector toggle takes
+        // effect immediately. The previous version only handled the "on"
+        // case, which left the spheres permanently visible after the first
+        // time they had been enabled.
+        bool show = showJointSpheres && armModeActive;
+        if (_shoulderSphere != null) _shoulderSphere.SetActive(show);
+        if (_elbowSphere    != null) _elbowSphere.SetActive(show);
+        if (_handSphere     != null) _handSphere.SetActive(show);
+        if (show)
         {
-            _shoulderSphere.SetActive(true);
-            _elbowSphere.SetActive(true);
-            _handSphere.SetActive(true);
             _shoulderSphere.transform.position = _jointSmoothed[SHOULDER];
             _elbowSphere.transform.position    = _jointSmoothed[ELBOW];
             _handSphere.transform.position     = _jointSmoothed[HAND];

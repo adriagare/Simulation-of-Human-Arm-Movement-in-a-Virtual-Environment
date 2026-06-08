@@ -1,0 +1,9 @@
+﻿marker_id,opti_x,opti_y,opti_z,unity_x,unity_y,unity_z,corner_name
+17639,0.057489,0.008425,0.075924,,,,raw_capture_0
+17647,1.218299,-0.004161,0.091953,,,,raw_capture_1
+17640,0.136241,0.001593,0.566588,,,,raw_capture_2
+17648,1.171397,-0.006060,0.494706,,,,raw_capture_3
+,,,,0.700000,1.100000,0.365000,bottom-right_expected
+,,,,-0.700000,1.100000,0.365000,bottom-left_expected
+,,,,0.700000,1.100000,1.035000,top-right_expected
+,,,,-0.700000,1.100000,1.035000,top-left_expected

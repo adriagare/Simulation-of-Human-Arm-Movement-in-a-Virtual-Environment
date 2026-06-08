@@ -16,11 +16,11 @@ using UnityEngine.InputSystem;
 public class CoordinateSynchronizer : MonoBehaviour
 {
     [Header("Table Corners (Unity World Space)")]
-    [Tooltip("Table Position (0,1.12,0.7) Scale (1.4,0.05,0.67) → surface Y=1.145, X: -0.7..0.7, Z: 0.365..1.035")]
-    public Vector3 unityPoint1 = new Vector3( 0.7f, 1.145f, 0.365f);   // bottom-right (closest to user)
-    public Vector3 unityPoint2 = new Vector3(-0.7f, 1.145f, 0.365f);   // bottom-left  (closest to user)
-    public Vector3 unityPoint3 = new Vector3( 0.7f, 1.145f, 1.035f);   // top-right    (far from user)
-    public Vector3 unityPoint4 = new Vector3(-0.7f, 1.145f, 1.035f);   // top-left     (far from user)
+    [Tooltip("Default values assume table surface Y=1.05. Override per scene from the Inspector if the table position changes; keep all four corners coplanar.")]
+    public Vector3 unityPoint1 = new Vector3( 0.7f, 1.10f, 0.365f);    // bottom-right (closest to user)
+    public Vector3 unityPoint2 = new Vector3(-0.7f, 1.10f, 0.365f);    // bottom-left  (closest to user)
+    public Vector3 unityPoint3 = new Vector3( 0.7f, 1.10f, 1.035f);    // top-right    (far from user)
+    public Vector3 unityPoint4 = new Vector3(-0.7f, 1.10f, 1.035f);    // top-left     (far from user)
 
     [Header("Pre-Calibration Settings")]
     [Tooltip("OptiTrack origin (0,0,0) sits at the table's bottom-right corner. " +
