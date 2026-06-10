@@ -45,8 +45,7 @@ MonoBehaviour:
   m_RequiresSettingsUpdate: 0
   m_AutomaticLoading: 0
   m_AutomaticRunning: 0
-  m_Loaders:
-  - {fileID: 11400000, guid: 17afc41331b61634396db4295dfabe3b, type: 2}
+  m_Loaders: []
 --- !u!114 &7123551527053655920
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -58,12 +57,12 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: f4c3631f5e58749a59194e0cf6baf6d5, type: 3}
   m_Name: Standalone Providers
-  m_EditorClassIdentifier:
+  m_EditorClassIdentifier: 
   m_RequiresSettingsUpdate: 0
-  m_AutomaticLoading: 1
-  m_AutomaticRunning: 1
+  m_AutomaticLoading: 0
+  m_AutomaticRunning: 0
   m_Loaders:
-  - {fileID: 11400000, guid: 17afc41331b61634396db4295dfabe3b, type: 2}
+  - {fileID: 11400000, guid: cbda1a893be0b634a8f6834a333bb237, type: 2}
 --- !u!114 &9030113687040111788
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -41,7 +41,7 @@ public class ExperimentController : MonoBehaviour
     [Tooltip("Magnitudes (deg) of the perturbation rotation applied to the displayed hand. A 0 entry serves as control.")]
     public float[] probeAngles        = new float[] { 0f, 8f, 16f, 24f, 32f, 40f, 48f, 56f, 64f, 72f, 80f };
     [Tooltip("Number of trials per perturbation level. Per-trial increment = (level_target - level_start) / trialsPerProbeLevel, so smaller values make each trial's added rotation more salient.")]
-    public int    trialsPerProbeLevel = 5;
+    public int    trialsPerProbeLevel = 2;
     [Tooltip("Randomize the sign (±) of the perturbation each probe trial. Recommended on to avoid motor adaptation.")]
     public bool   randomizeProbeDirection = true;
     [Tooltip("Randomize the order of probe levels. If off, levels are presented from smallest to largest.")]
